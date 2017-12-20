@@ -29,6 +29,8 @@ from datasets import dataset_factory
 from nets import nets_factory
 from preprocessing import preprocessing_factory
 
+from compiler.ast import flatten
+
 slim = tf.contrib.slim
 
 # =========================================================================== #
@@ -173,14 +175,15 @@ def main(_):
                 batch_size=FLAGS.batch_size,
                 num_threads=FLAGS.num_preprocessing_threads,
                 capacity=5 * FLAGS.batch_size,
-                dynamic_pad=True)
+                dynamic_pad=True,
+                name="eval_batch")
+
             (b_image, b_glabels, b_gbboxes, b_gdifficults, b_gbbox_img, b_gclasses,
              b_glocalisations, b_gscores) = tf_utils.reshape_list(r, batch_shape)
 
         # =================================================================== #
         # SSD Network + Ouputs decoding.
         # =================================================================== #
-        dict_metrics = {}
         arg_scope = ssd_net.arg_scope(data_format=DATA_FORMAT)
         with slim.arg_scope(arg_scope):
             predictions, localisations, logits, end_points = \
@@ -200,6 +203,7 @@ def main(_):
                                         clipping_bbox=None,
                                         top_k=FLAGS.select_top_k,
                                         keep_top_k=FLAGS.keep_top_k)
+
             # Compute TP and FP statistics.
             num_gbboxes, tp, fp, rscores = \
                 tfe.bboxes_matching_batch(rscores.keys(), rscores, rbboxes,
@@ -301,6 +305,9 @@ def main(_):
         else:
             num_batches = math.ceil(dataset.num_samples / float(FLAGS.batch_size))
 
+        with tf.Session() as sess:
+            tf.train.write_graph(sess.graph_def, './', 'ssd_vgg_graph.pbtxt')
+
         if not FLAGS.wait_for_checkpoints:
             if tf.gfile.IsDirectory(FLAGS.checkpoint_path):
                 checkpoint_path = tf.train.latest_checkpoint(FLAGS.checkpoint_path)
@@ -315,7 +322,7 @@ def main(_):
                 checkpoint_path=checkpoint_path,
                 logdir=FLAGS.eval_dir,
                 num_evals=num_batches,
-                eval_op=list(names_to_updates.values()),
+                eval_op=flatten(list(names_to_updates.values())),
                 variables_to_restore=variables_to_restore,
                 session_config=config)
             # Log time spent.
@@ -334,7 +341,7 @@ def main(_):
                 checkpoint_dir=checkpoint_path,
                 logdir=FLAGS.eval_dir,
                 num_evals=num_batches,
-                eval_op=list(names_to_updates.values()),
+                eval_op=flatten(list(names_to_updates.values())),
                 variables_to_restore=variables_to_restore,
                 eval_interval_secs=60,
                 max_number_of_evaluations=np.inf,
